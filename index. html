@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Air Draw</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <style>
+        body {
+            margin: 0;
+            background: #0a0a0a;
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #controls {
+            position: absolute;
+            top: 20px;
+            z-index: 10;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px 25px;
+            border-radius: 50px;
+            backdrop-filter: blur(10px);
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            cursor: crosshair;
+        }
+
+        #video-container {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 240px;
+            height: 180px;
+            border-radius: 15px;
+            overflow: hidden;
+            border: 2px solid #333;
+            transform: scaleX(-1); /* Flip video for mirroring */
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        label { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; }
+        input[type="color"] { border: none; width: 30px; height: 30px; cursor: pointer; background: none; }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <div class="control-group">
+            <label>Color</label>
+            <input type="color" id="colorPicker" value="#00f2ff">
+        </div>
+        <div class="control-group">
+            <label>Thickness</label>
+            <input type="range" id="thickness" min="2" max="20" value="5">
+        </div>
+        <div id="status" style="font-weight: bold; color: #00f2ff;">Initializing...</div>
+    </div>
+
+    <div id="video-container">
+        <video id="input_video"></video>
+    </div>
+    
+    <canvas id="drawCanvas"></canvas>
+
+    <script>
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('drawCanvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const statusText = document.getElementById('status');
+        const colorPicker = document.getElementById('colorPicker');
+        const thicknessSlider = document.getElementById('thickness');
+
+        let isPaused = false;
+        let lastX = 0;
+        let lastY = 0;
+
+        // Resize canvas to window
+        function resize() {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+            canvasCtx.lineCap = 'round';
+            canvasCtx.lineJoin = 'round';
+            // Set initial dark background
+            canvasCtx.fillStyle = '#0a0a0a';
+            canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        function onResults(results) {
+            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+                statusText.innerText = "No Hand Detected";
+                return;
+            }
+
+            const landmarks = results.multiHandLandmarks[0];
+            
+            // Landmark Points: Index Tip (8), Index Base (5), Middle Tip (12), Ring Tip (16), Pinky Tip (20), Thumb Tip (4)
+            const indexTip = landmarks[8];
+            const middleTip = landmarks[12];
+            const ringTip = landmarks[16];
+            const pinkyTip = landmarks[20];
+            const thumbTip = landmarks[4];
+
+            // Convert normalized coordinates to pixel coordinates (mirrored)
+            const x = (1 - indexTip.x) * canvasElement.width;
+            const y = indexTip.y * canvasElement.height;
+
+            // Gesture Logic
+            const isIndexExtended = indexTip.y < landmarks[6].y;
+            const isMiddleExtended = middleTip.y < landmarks[10].y;
+            const isRingExtended = ringTip.y < landmarks[14].y;
+            const isPinkyExtended = pinkyTip.y < landmarks[18].y;
+
+            // 1. Pause Logic: Closed Fist (All fingers down)
+            if (!isIndexExtended && !isMiddleExtended && !isRingExtended && !isPinkyExtended) {
+                isPaused = true;
+                statusText.innerText = "PAUSED";
+                statusText.style.color = "#ff4757";
+            } 
+            // 2. Erase Logic: Open Palm (All fingers up)
+            else if (isIndexExtended && isMiddleExtended && isRingExtended && isPinkyExtended) {
+                isPaused = false;
+                statusText.innerText = "ERASING";
+                statusText.style.color = "#ffa502";
+                canvasCtx.globalCompositeOperation = 'destination-out'; // "Erase" effect
+                draw(x, y, 40); // Larger eraser radius
+            } 
+            // 3. Draw Logic: Only Index Finger up (or standard drawing state)
+            else {
+                isPaused = false;
+                statusText.innerText = "DRAWING";
+                statusText.style.color = colorPicker.value;
+                canvasCtx.globalCompositeOperation = 'source-over';
+                draw(x, y, thicknessSlider.value);
+            }
+
+            lastX = x;
+            lastY = y;
+        }
+
+        function draw(x, y, size) {
+            if (isPaused) return;
+
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(lastX, lastY);
+            canvasCtx.lineTo(x, y);
+            
+            // Neon Glow Effect
+            canvasCtx.strokeStyle = colorPicker.value;
+            canvasCtx.lineWidth = size;
+            canvasCtx.shadowBlur = 15;
+            canvasCtx.shadowColor = colorPicker.value;
+            
+            canvasCtx.stroke();
+            canvasCtx.closePath();
+            
+            // Reset shadow for performance if needed
+            canvasCtx.shadowBlur = 0;
+        }
+
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
+        });
+
+        hands.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 640,
+            height: 480
+        });
+        camera.start();
+    </script>
+</body>
+</html>
